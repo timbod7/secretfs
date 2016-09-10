@@ -1,6 +1,7 @@
 module Main where
 
-import Lib
+import System.Fuse(fuseMain,defaultExceptionHandler)
+import System.SecretFS
 
 main :: IO ()
-main = someFunc
+main = fuseMain secretFSOps defaultExceptionHandler
