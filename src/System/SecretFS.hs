@@ -1,112 +1,146 @@
-module System.SecretFS(
-  secretFSOps
-  )where
+{-# LANGUAGE OverloadedStrings #-}
 
-import qualified Data.ByteString.Char8 as B
+module System.SecretFS(
+  createSecretFS,
+  SecretFSConfig(..)
+  ) where
+
+import qualified Data.ByteString.Char8 as BS
+
+import Control.Applicative
+import Control.Exception(handle,catch,fromException,SomeException)
+import Control.Monad
+import Data.ByteString.Char8(pack)
+import Data.List(nubBy)
+import Data.Maybe(fromJust)
 import Foreign.C.Error
-import System.Posix.Types
+import GHC.IO.Exception(IOException(..))
+import System.IO
+import System.Posix.Types(ByteCount,FileOffset)
 import System.Posix.Files
-import System.Posix.IO
+import System.Directory
+import System.FilePath.Posix
 
 import System.Fuse
 
 type HT = ()
 
-secretFSOps :: FuseOperations HT
-secretFSOps = defaultFuseOps { fuseGetFileStat = helloGetFileStat
-                            , fuseOpen        = helloOpen
-                            , fuseRead        = helloRead 
-                            , fuseOpenDirectory = helloOpenDirectory
-                            , fuseReadDirectory = helloReadDirectory
-                            , fuseGetFileSystemStats = helloGetFileSystemStats
-                            }
-helloString :: B.ByteString
-helloString = B.pack "Hello World, HFuse!\n"
+data SecretFSConfig = SecretFSConfig {
+  sc_srcDir :: FilePath,
+  sc_log :: BS.ByteString -> IO ()
+  }
 
-helloPath :: FilePath
-helloPath = "/hello"
-dirStat ctx = FileStat { statEntryType = Directory
-                       , statFileMode = foldr1 unionFileModes
-                                          [ ownerReadMode
-                                          , ownerExecuteMode
-                                          , groupReadMode
-                                          , groupExecuteMode
-                                          , otherReadMode
-                                          , otherExecuteMode
-                                          ]
-                       , statLinkCount = 2
-                       , statFileOwner = fuseCtxUserID ctx
-                       , statFileGroup = fuseCtxGroupID ctx
-                       , statSpecialDeviceID = 0
-                       , statFileSize = 4096
-                       , statBlocks = 1
-                       , statAccessTime = 0
-                       , statModificationTime = 0
-                       , statStatusChangeTime = 0
-                       }
+type State = SecretFSConfig
 
-fileStat ctx = FileStat { statEntryType = RegularFile
-                        , statFileMode = foldr1 unionFileModes
-                                           [ ownerReadMode
-                                           , groupReadMode
-                                           , otherReadMode
-                                           ]
-                        , statLinkCount = 1
-                        , statFileOwner = fuseCtxUserID ctx
-                        , statFileGroup = fuseCtxGroupID ctx
-                        , statSpecialDeviceID = 0
-                        , statFileSize = fromIntegral $ B.length helloString
-                        , statBlocks = 1
-                        , statAccessTime = 0
-                        , statModificationTime = 0
-                        , statStatusChangeTime = 0
-                        }
+createSecretFS :: SecretFSConfig -> IO (FuseOperations Handle)
+createSecretFS config = do
+  let state = config
+  return $ defaultFuseOps
+    { fuseGetFileStat        = secretGetFileStat state
+    , fuseOpen               = secretOpen state
+    , fuseFlush              = secretFlush state
+    , fuseRead               = secretRead state
+    , fuseOpenDirectory      = secretOpenDirectory state
+    , fuseReadDirectory      = secretReadDirectory state
+    , fuseGetFileSystemStats = secretGetFileSystemStats state
+    }
 
-helloGetFileStat :: FilePath -> IO (Either Errno FileStat)
-helloGetFileStat "/" = do
-    ctx <- getFuseContext
-    return $ Right $ dirStat ctx
-helloGetFileStat path | path == helloPath = do
-    ctx <- getFuseContext
-    return $ Right $ fileStat ctx
-helloGetFileStat _ =
-    return $ Left eNOENT
+secretGetFileStat :: State -> FilePath -> IO (Either Errno FileStat)
+secretGetFileStat state path = do
+  sc_log state (BS.pack ("secretGetFileStat " ++ path ++ " -> " ++ (realPath state path)))
+  exceptionToEither state (convertStatus <$> getFileStatus (realPath state path))
 
-helloOpenDirectory "/" = return eOK
-helloOpenDirectory _   = return eNOENT
+secretOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno Handle)
+secretOpen state path mode flags = do
+  sc_log state "secretOpen"
+  exceptionToEither state (openFile (realPath state path) ReadMode)
 
-helloReadDirectory :: FilePath -> IO (Either Errno [(FilePath, FileStat)])
-helloReadDirectory "/" = do
-    ctx <- getFuseContext
-    return $ Right [(".",          dirStat  ctx)
-                   ,("..",         dirStat  ctx)
-                   ,(helloName,    fileStat ctx)
-                   ]
-    where (_:helloName) = helloPath
-helloReadDirectory _ = return (Left (eNOENT))
+secretFlush :: State -> FilePath -> Handle -> IO Errno
+secretFlush state _ h =  catch (hClose h >> return eOK) (exceptionHandler state)
 
-helloOpen :: FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno HT)
-helloOpen path mode flags
-    | path == helloPath = case mode of
-                            ReadOnly -> return (Right ())
-                            _        -> return (Left eACCES)
-    | otherwise         = return (Left eNOENT)
+secretRead  :: State -> FilePath -> Handle -> ByteCount -> FileOffset -> IO (Either Errno BS.ByteString)
+secretRead state path h byteCount offset = do
+  sc_log state "secretRead"
+  exceptionToEither state $ do
+    hSeek h AbsoluteSeek (fromIntegral offset)
+    BS.hGet h (fromIntegral byteCount)
 
+secretOpenDirectory :: State -> FilePath -> IO Errno
+secretOpenDirectory state path = do
+  sc_log state (BS.pack ("secretOpenDirectory " ++ path ++ " -> " ++ (realPath state path)))
+  handle (exceptionHandler state) $ do
+    stats <- getFileStatus (realPath state path)
+    case isDirectory stats of
+      True -> return eOK
+      False -> return eNOENT
 
-helloRead :: FilePath -> HT -> ByteCount -> FileOffset -> IO (Either Errno B.ByteString)
-helloRead path _ byteCount offset
-    | path == helloPath =
-        return $ Right $ B.take (fromIntegral byteCount) $ B.drop (fromIntegral offset) helloString
-    | otherwise         = return $ Left eNOENT
+secretReadDirectory :: State ->FilePath -> IO (Either Errno [(FilePath, FileStat)])
+secretReadDirectory state path = do
+  sc_log state (BS.pack ("secretReadDirectory " ++ path ++ " -> " ++ (realPath state path)))
+  let basedir = realPath state path
+  exceptionToEither state $ do
+    contents <- getDirectoryContents basedir
+    forM (filter nonSpecial contents) $ \file -> do
+      stats <- getFileStatus (basedir </> file)
+      return (file,convertStatus stats)
+  where
+    nonSpecial "." = False
+    nonSpecial ".." = False
+    nonSpecial _ = True
 
-helloGetFileSystemStats :: String -> IO (Either Errno FileSystemStats)
-helloGetFileSystemStats str =
-  return $ Right $ FileSystemStats
-    { fsStatBlockSize = 512
+secretGetFileSystemStats :: State -> String -> IO (Either Errno FileSystemStats)
+secretGetFileSystemStats state str = do
+  sc_log state "secretGetFileSystemStats"
+  return $ Right FileSystemStats
+    { fsStatBlockSize  = 512
     , fsStatBlockCount = 1
     , fsStatBlocksFree = 1
     , fsStatBlocksAvailable = 1
-    , fsStatFileCount = 5
-    , fsStatFilesFree = 10
-    , fsStatMaxNameLength = 255
+    , fsStatFileCount  = 5      -- FIXME
+    , fsStatFilesFree  = 10     -- FIXME
+    , fsStatMaxNameLength = 255 -- FIXME
     }
+
+realPath :: State -> FilePath -> FilePath
+realPath state (c:path) | c == '/' = sc_srcDir state </> path
+realPath state path = sc_srcDir state </> path
+
+exceptionToEither :: State -> IO a -> IO (Either Errno a)
+exceptionToEither state ioa = catch (Right <$> ioa) (\e -> Left <$> exceptionHandler state e)
+
+exceptionHandler :: State -> SomeException -> IO Errno
+exceptionHandler state e = case fromException e of
+   (Just e) -> case ioe_errno e of
+     (Just errno) -> return (Errno errno)
+     Nothing -> do
+       sc_log state (BS.pack ("io exception without errno: " ++ show e))
+       return eFAULT
+   Nothing -> do
+     sc_log state (BS.pack ("exception: " ++ show e))
+     return eFAULT
+
+convertStatus :: FileStatus -> FileStat
+convertStatus status = 
+  let entryType | isRegularFile status = RegularFile
+                | isNamedPipe status = NamedPipe
+                | isCharacterDevice status = CharacterSpecial
+                | isDirectory status  = Directory
+                | isBlockDevice status = BlockSpecial
+                | isSymbolicLink status = SymbolicLink
+                | isSocket status = Socket
+                | otherwise = Unknown
+  in FileStat
+    { statEntryType = entryType
+    , statFileMode  = fileMode status
+    , statLinkCount = linkCount status
+    , statFileOwner = fileOwner status
+    , statFileGroup = fileGroup status
+    , statSpecialDeviceID = specialDeviceID status
+    , statFileSize  = fileSize status
+    , statBlocks    = 1 -- FIXME
+    , statAccessTime= accessTime status
+    , statModificationTime = modificationTime status
+    , statStatusChangeTime = statusChangeTime status
+    }
+
+
