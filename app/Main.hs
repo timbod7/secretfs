@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
 import qualified Data.ByteString.Char8 as BS
@@ -25,6 +26,7 @@ main = do
      logh <- openFile "/tmp/secretfs.log" WriteMode
      let config = SecretFSConfig {
            sc_srcDir = srcdir,
+           sc_keyPhrase = "xyzzy", -- FIXME
            sc_log = logMessage logh
            }
      fuseOperations <- createSecretFS config 
