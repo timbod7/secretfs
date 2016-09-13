@@ -8,6 +8,7 @@ module System.SecretFS(
 import qualified Data.Aeson as JSON
 import qualified Data.Aeson.Types as JSON
 import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -16,6 +17,9 @@ import Control.Exception(handle,catch,fromException,throwIO,SomeException,Except
 import Control.Monad
 import Control.Monad.STM
 import Control.Concurrent.STM.TVar
+import Crypto.RNCryptor.V3.Decrypt(decrypt)
+import Crypto.RNCryptor.V3.Encrypt(encrypt)
+import Crypto.RNCryptor.Types(newRNCryptorContext,newRNCryptorHeader)
 import Data.ByteString.Char8(pack)
 import Data.List(nubBy)
 import Data.Maybe(fromJust)
@@ -50,12 +54,14 @@ data DirConfig = DirConfig {
   }
 
 data MagicFileType
-  = Encrypted
+  = Regular
+  | Encrypted
   | Interpolated
 
 data SHandle = SHandle {
   sh_flush :: IO (),
-  sh_read :: ByteCount -> FileOffset -> IO BS.ByteString
+  sh_read :: ByteCount -> FileOffset -> IO BS.ByteString,
+  sh_write :: BS.ByteString -> FileOffset -> IO ByteCount
   }
 
 createSecretFS :: SecretFSConfig -> IO (FuseOperations SHandle)
@@ -70,6 +76,8 @@ createSecretFS config = do
     , fuseOpen               = secretOpen state
     , fuseFlush              = secretFlush state
     , fuseRead               = secretRead state
+    , fuseWrite              = secretWrite state
+    , fuseSetFileSize        = secretSetFileSize state
     , fuseOpenDirectory      = secretOpenDirectory state
     , fuseReadDirectory      = secretReadDirectory state
     , fuseGetFileSystemStats = secretGetFileSystemStats state
@@ -78,7 +86,7 @@ createSecretFS config = do
 -- | Get the configuration for a directory, caching
 -- the result based upon file modification time
 getDirConfig :: State -> FilePath -> IO DirConfig
-getDirConfig state path = do
+getDirConfig state path = logcall "getDirConfig" state path $ do
   currentModifyTime <- modificationTime <$> getFileStatus (realPath state path)
   let updateConfig = do
        dirConfig <- loadDirConfig state path
@@ -92,19 +100,54 @@ getDirConfig state path = do
       if currentModifyTime > oldModifyTime
         then updateConfig 
         else return oldDirConfig
-      
-loadDirConfig :: State -> FilePath -> IO DirConfig
-loadDirConfig = undefined
 
-regularFile :: State -> FilePath -> IO SHandle
-regularFile state path = do
-  h <- (openFile (realPath state path) ReadMode)
+-- | Read and parse the configuration for a
+-- directory      
+loadDirConfig :: State -> FilePath -> IO DirConfig
+loadDirConfig state path = logcall "loadDirConfig" state path $ do
+  let cpath = realPath state path </> ".secretfs"
+  exists <- doesFileExist cpath
+  if exists
+    then do
+      content <- LBS.readFile cpath
+      case JSON.decode content of
+       (Just dirConfig) -> return dirConfig
+       Nothing -> throwIO (SException "Invalide .secretfs file" (Just cpath) eFAULT)
+    else do
+      return (DirConfig M.empty)
+
+-- Quick and dirty json parsing of the directory
+-- config
+instance JSON.FromJSON DirConfig where
+  parseJSON o = DirConfig <$> JSON.parseJSON o
+
+instance JSON.FromJSON MagicFileType where
+  parseJSON (JSON.String s) | s == "encrypted" = pure Encrypted
+                            | s == "instance" = pure Interpolated
+                            | s == "regular" = pure Regular
+                            | otherwise = empty
+  parseJSON _ = empty
+  
+regularFile :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
+regularFile state path mode flags = logcall "regularFile" state path $ do
+  let rpath = realPath state path
+  h <- (openFile rpath (convertMode mode flags))
   return SHandle {
-    sh_flush = hClose h,
-    sh_read = \byteCount offset -> do
+    sh_flush = flush h,
+    sh_read = read h,
+    sh_write = write h
+    }
+  where
+    flush h = logcall "regularFile.flush" state path (hClose h)
+
+    read h byteCount offset = logcall "regularFile.read" state path $ do
       hSeek h AbsoluteSeek (fromIntegral offset)
       BS.hGet h (fromIntegral byteCount)
-    }
+
+    write h content offset = logcall "regularFile.read" state path $ do
+      hSeek h AbsoluteSeek (fromIntegral offset)
+      BS.hPut h content
+      return (fromIntegral (BS.length content))
 
 data EncFileState = EncFileState
   { efs_cleartext :: BS.ByteString
@@ -116,7 +159,9 @@ encryptedFile state path keyphrase = do
   exists <- doesFileExist rpath
   istate <- if exists
     then do
-      clearText <- readEncryptedFile rpath keyphrase
+      clearText <- do
+        cipherText <- BS.readFile rpath
+        return (decrypt cipherText keyphrase)
       return (EncFileState clearText False)
      else do
       return (EncFileState "" True)
@@ -124,49 +169,91 @@ encryptedFile state path keyphrase = do
   efstate <- atomically $ newTVar istate
   return SHandle {
     sh_flush = flushFile efstate,
-    sh_read = readFile efstate
+    sh_read = readFile efstate,
+    sh_write = writeFile efstate
     }
 
   where
     rpath :: FilePath
     rpath = realPath state path
 
-    readEncryptedFile :: FilePath -> KeyPhrase -> IO BS.ByteString
-    readEncryptedFile = undefined
-
-    writeEncryptedFile :: FilePath -> KeyPhrase -> IO BS.ByteString
-    writeEncryptedFile = undefined
-
     readFile :: TVar EncFileState -> ByteCount -> FileOffset -> IO BS.ByteString
-    readFile = undefined
+    readFile efstate byteCount offset = do
+      (EncFileState cleartext dirty) <- atomically (readTVar efstate)
+      return (BS.take (fromIntegral byteCount) (BS.drop (fromIntegral offset) cleartext))
+
+    writeFile :: TVar EncFileState -> BS.ByteString -> FileOffset -> IO ByteCount
+    writeFile efstate content offset = do
+      (EncFileState cleartext dirty) <- atomically (readTVar efstate)
+      let lencleartext = BS.length cleartext
+          lencontent = BS.length content
+          offset' = fromIntegral offset
+
+          -- FIXME: efficiency: perhaps a lazy bytestring or some other structure?
+          cleartext' = BS.concat
+            [ BS.take offset' cleartext
+            , if offset' > lencleartext then BS.replicate (offset' - lencleartext) (toEnum 0) else ""
+            , content
+            , BS.drop (offset' + lencontent) cleartext
+            ]
+      atomically (writeTVar efstate (EncFileState cleartext' True))
+      return (fromIntegral lencontent)
 
     flushFile :: TVar EncFileState -> IO ()
-    flushFile = undefined
+    flushFile efstate = do
+      (EncFileState cleartext dirty) <- atomically (readTVar efstate)
+      when dirty $ do
+        hdr <- newRNCryptorHeader keyphrase
+        let ctx = newRNCryptorContext keyphrase hdr
+        let cipherText = encrypt ctx cleartext
+        BS.writeFile rpath cipherText
 
-interpolatedFile :: State -> FilePath -> IO SHandle
-interpolatedFile = undefined
+interpolatedFile :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
+interpolatedFile state path ReadOnly _ = undefined
+interpolatedFile _ path _ _ = throwIO (SException "Interpolated files are readonly" (Just path) ePERM)
 
 secretGetFileStat :: State -> FilePath -> IO (Either Errno FileStat)
-secretGetFileStat state path = do
-  s_log state (BS.pack ("secretGetFileStat " ++ path ++ " -> " ++ (realPath state path)))
+secretGetFileStat state path = logcall "secretGetFileStat" state path $ do
   exceptionToEither state (convertStatus <$> getFileStatus (realPath state path))
 
 secretOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno SHandle)
-secretOpen state path mode flags = exceptionToEither state $ do
-  dc <- getDirConfig state (takeDirectory (realPath state path))
+secretOpen state path mode flags = exceptionToEither state $ logcall "secretOpen" state path $ do
+  ftype <- getFileType state path
+  case ftype of
+    Regular ->   regularFile state path mode flags
+    Encrypted -> encryptedFile state path (s_keyPhrase state)
+    Interpolated -> interpolatedFile state path mode flags
+
+getFileType :: State -> FilePath ->IO MagicFileType
+getFileType state path = do
+  dc <- getDirConfig state (takeDirectory path)
   case M.lookup (takeFileName path) (dc_fileTypes dc) of
-    Nothing -> regularFile state path
-    (Just magicType) -> case magicType of
-      Encrypted -> encryptedFile state path (s_keyPhrase state)
-      Interpolated -> case mode of
-        ReadOnly -> interpolatedFile state path
-        _ -> throwIO (SException "Interpolated files are readonly" (Just path) ePERM)
+    Nothing -> return Regular
+    (Just magicType) -> return magicType
 
 secretFlush :: State -> FilePath -> SHandle -> IO Errno
 secretFlush state _ sh =  catch (sh_flush sh >> return eOK) (exceptionHandler state)
 
 secretRead  :: State -> FilePath -> SHandle -> ByteCount -> FileOffset -> IO (Either Errno BS.ByteString)
 secretRead state path sh byteCount offset = exceptionToEither state (sh_read sh byteCount offset)
+
+secretWrite  :: State -> FilePath -> SHandle -> BS.ByteString -> FileOffset -> IO (Either Errno ByteCount)
+secretWrite state path sh content offset = exceptionToEither state (sh_write sh content offset)
+
+secretSetFileSize :: State -> FilePath -> FileOffset -> IO Errno
+secretSetFileSize = undefined
+
+logcall :: String -> State -> FilePath -> IO a -> IO a
+logcall fnname state path ioa = do
+  s_log state (BS.pack (fnname ++ ": " ++ path ++ " -> " ++ realPath state path))
+  a <- catch ioa handler
+  s_log state (BS.pack (fnname ++ ": Done"))
+  return a
+  where
+    handler :: SomeException -> IO a
+    handler se = do
+       s_log state (BS.pack (fnname ++ ": Failed with " ++ show se))
+       throwIO se
 
 secretOpenDirectory :: State -> FilePath -> IO Errno
 secretOpenDirectory state path = do
@@ -262,67 +349,8 @@ convertStatus status =
     , statStatusChangeTime = statusChangeTime status
     }
 
--- type AccessTimes = M.Map FilePath EpochTime
-
--- data CachedValue a = CachedValue {
---   cv_value :: TVar a,
---   cv_accessTime :: TVar AccessTimes,
---   cv_calculate :: IO (a,AccessTimes)
---   }
-
--- cvReadfile :: FilePath -> IO (CachedValue BS.ByteString)
--- cvReadfile path = newCachedValue $ do
---   modTime <- modificationTime <$> getFileStatus path
---   bs <- BS.readFile path
---   return (bs, M.singleton path modTime)
-
--- newCachedValue :: IO (a,AccessTimes) -> IO (CachedValue a)
--- newCachedValue = undefined
-
--- getCV :: CachedValue a -> IO a
--- getCV = undefined
-
--- instance Functor Cached where
---   fmap f dv = dv{dv_value=f (dv_value dv),dv_calculate=fmap (fmap f) (dv_calculate dv)}
-
--- data DerivedValue a = DerivedValue {
---   dv_value :: a,
---   dv_accessTimes :: (M.Map FilePath EpochTime),
---   dv_calculate :: IO (DerivedValue a)
--- }
-  
--- instance Functor DerivedValue where
---   fmap f dv = dv{dv_value=f (dv_value dv),dv_calculate=fmap (fmap f) (dv_calculate dv)}
-
--- instance Applicative DerivedValue where
---   pure v = DerivedValue v M.empty (return (pure v))
---   af <*> av = DerivedValue {
---     dv_value=dv_value af (dv_value av),
---     dv_accessTimes=M.unionWith min (dv_accessTimes af) (dv_accessTimes av),
---     dv_calculate = do
---       af' <- dv_calculate af
---       av' <- dv_calculate av
---       return (af <*> av)
---     }
-
-
--- cachedReadFile :: FilePath -> IO (IO BS.ByteString)
--- cachedReadFile path = do
---   modTime <- modificationTime <$> getFileStatus
---   bs <- BS.readFile path
---   v <- atomically (newTVar (modTime,bs))
---   return $ do
---     (modTime,bs) <- atomically (readTVar v)
---     modTime' <- modificationTime <$> getFileStatus
---     if modTime' <= modTime
---        then return bs
---        else do
---          bs' <- BS.readFile path
---          atomically (writeVar v (modTime',bs'))
---          return bs'
-                    
-         
-    
-  
-
-
+convertMode :: OpenMode -> OpenFileFlags -> IOMode
+convertMode ReadOnly _ =   ReadMode 
+convertMode WriteOnly OpenFileFlags{append=True} = AppendMode
+convertMode WriteOnly _ = WriteMode
+convertMode ReadWrite _ = ReadWriteMode
