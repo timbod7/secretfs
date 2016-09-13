@@ -4,6 +4,8 @@ import qualified Data.ByteString.Char8 as BS
 
 import System.Fuse(OpenMode,OpenFileFlags)
 import System.IO(IOMode(..),SeekMode(..),openFile,hClose,hSeek)
+import System.Posix.Types(ByteCount,FileOffset,EpochTime)
+import System.Posix.Files(setFileSize)
 
 import System.SecretFS.Core
 
@@ -27,3 +29,8 @@ regularFile state path mode flags = logcall "regularFile" state path $ do
       hSeek h AbsoluteSeek (fromIntegral offset)
       BS.hPut h content
       return (fromIntegral (BS.length content))
+
+regularFileSetSize :: State -> FilePath -> FileOffset -> IO ()
+regularFileSetSize state path offset =  setFileSize (realPath state path) offset
+  
+  

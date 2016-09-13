@@ -10,7 +10,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 
 import Control.Applicative
-import Control.Exception(handle,catch)
+import Control.Exception(handle,catch,throwIO)
 import Control.Monad
 import Control.Monad.STM
 import Control.Concurrent.STM.TVar
@@ -71,11 +71,15 @@ secretWrite  :: State -> FilePath -> SHandle -> BS.ByteString -> FileOffset -> I
 secretWrite state path sh content offset = exceptionToEither state (sh_write sh content offset)
 
 secretFlush :: State -> FilePath -> SHandle -> IO Errno
-secretFlush state _ sh =  catch (sh_flush sh >> return eOK) (exceptionHandler state)
+secretFlush state _ sh =  exceptionToErrno state (sh_flush sh)
 
 secretSetFileSize :: State -> FilePath -> FileOffset -> IO Errno
-secretSetFileSize = undefined
-
+secretSetFileSize state path offset = exceptionToErrno state $ logcall "secretSetFileSize" state path $ do
+  ftype <- getFileType state path
+  case ftype of
+    Regular ->   regularFileSetSize state path offset
+    Encrypted -> throwIO (SException "unimplemented" (Just path) eFAULT)
+    Interpolated -> throwIO (SException "unimplemented" (Just path) eFAULT)
 
 secretOpenDirectory :: State -> FilePath -> IO Errno
 secretOpenDirectory state path = logcall "secretOpenDirectory" state path $ do

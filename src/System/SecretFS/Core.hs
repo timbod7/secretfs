@@ -60,6 +60,9 @@ realPath state path = s_srcDir state </> path
 exceptionToEither :: State -> IO a -> IO (Either Errno a)
 exceptionToEither state ioa = catch (Right <$> ioa) (\e -> Left <$> exceptionHandler state e)
 
+exceptionToErrno :: State  -> IO () -> IO Errno
+exceptionToErrno state io = catch (io >> return eOK) (exceptionHandler state)
+
 exceptionHandler :: State -> SomeException -> IO Errno
 exceptionHandler state e = case fromException e of
    (Just e) -> case ioe_errno e of
