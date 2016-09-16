@@ -10,9 +10,10 @@ import Crypto.RNCryptor.V3.Decrypt(decrypt)
 import Crypto.RNCryptor.V3.Encrypt(encrypt)
 import Crypto.RNCryptor.Types(newRNCryptorContext,newRNCryptorHeader)
 import System.Directory(doesFileExist)
-import System.Fuse(OpenMode,OpenFileFlags)
+import System.Fuse(OpenMode,OpenFileFlags,FileStat(..),EntryType(..))
 import System.IO(IOMode(..),SeekMode(..),openFile,hClose,hSeek)
 import System.Posix.Types(ByteCount,FileOffset,EpochTime)
+import System.Posix.Files(getFileStatus)
 
 import System.SecretFS.Core
 
@@ -21,14 +22,12 @@ data EncFileState = EncFileState
   , efs_dirty :: Bool
   }
 
-encryptedFile :: State -> FilePath -> KeyPhrase -> IO SHandle
-encryptedFile state path keyphrase = do
+encryptedFileOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
+encryptedFileOpen state path _ _ = do
   exists <- doesFileExist rpath
   istate <- if exists
     then do
-      clearText <- do
-        cipherText <- BS.readFile rpath
-        return (decrypt cipherText keyphrase)
+      clearText <- decryptReadFile rpath (s_keyPhrase state)
       return (EncFileState clearText False)
      else do
       return (EncFileState "" True)
@@ -45,12 +44,12 @@ encryptedFile state path keyphrase = do
     rpath = realPath state path
 
     readFile :: TVar EncFileState -> ByteCount -> FileOffset -> IO BS.ByteString
-    readFile efstate byteCount offset = do
+    readFile efstate byteCount offset = logcall "encryptedFile.read" state rpath $ do
       (EncFileState cleartext dirty) <- atomically (readTVar efstate)
       return (BS.take (fromIntegral byteCount) (BS.drop (fromIntegral offset) cleartext))
 
     writeFile :: TVar EncFileState -> BS.ByteString -> FileOffset -> IO ByteCount
-    writeFile efstate content offset = do
+    writeFile efstate content offset = logcall "encryptedFile.write" state path $ do
       (EncFileState cleartext dirty) <- atomically (readTVar efstate)
       let lencleartext = BS.length cleartext
           lencontent = BS.length content
@@ -67,10 +66,59 @@ encryptedFile state path keyphrase = do
       return (fromIntegral lencontent)
 
     flushFile :: TVar EncFileState -> IO ()
-    flushFile efstate = do
+    flushFile efstate = logcall "encryptedFile.flush" state path $ do
       (EncFileState cleartext dirty) <- atomically (readTVar efstate)
-      when dirty $ do
-        hdr <- newRNCryptorHeader keyphrase
-        let ctx = newRNCryptorContext keyphrase hdr
-        let cipherText = encrypt ctx cleartext
-        BS.writeFile rpath cipherText
+      when dirty $ encryptWriteFile rpath (s_keyPhrase state) cleartext
+
+decryptReadFile :: FilePath -> KeyPhrase -> IO BS.ByteString
+decryptReadFile path keyphrase = do
+  cipherText <- BS.readFile path
+  return (decrypt cipherText keyphrase)
+
+encryptWriteFile :: FilePath -> KeyPhrase -> BS.ByteString -> IO ()
+encryptWriteFile path keyphrase cleartext = do
+  hdr <- newRNCryptorHeader keyphrase
+  let ctx = newRNCryptorContext keyphrase hdr
+  let cipherText = encrypt ctx cleartext
+  BS.writeFile path cipherText
+
+encryptedFileSetSize :: State -> FilePath -> FileOffset -> IO ()
+encryptedFileSetSize state path size =  do
+  exists <- doesFileExist rpath
+  when exists $ do
+    clearText <- decryptReadFile rpath (s_keyPhrase state)
+    when (BS.length clearText /= fromIntegral size) $ do
+      let clearText' = BS.take (fromIntegral size) clearText
+      encryptWriteFile rpath clearText' (s_keyPhrase state)
+  where
+    rpath = realPath state path
+
+encryptedGetFileStat :: State -> FilePath -> IO FileStat
+encryptedGetFileStat state path = do
+  exists <- doesFileExist rpath
+  if exists
+    then do
+      fileStat <- convertStatus <$> getFileStatus rpath
+      -- Need some sort of caching for this
+      clearTextLength <- BS.length <$> decryptReadFile rpath (s_keyPhrase state)
+      return fileStat{statFileSize=fromIntegral clearTextLength}
+      
+    else return newFileStat
+  where
+    rpath = realPath state path
+    newFileStat = FileStat
+      { statEntryType = RegularFile
+      , statFileMode = 0o700
+      , statLinkCount = 1
+      , statFileOwner = (s_userID state)
+      , statFileGroup = (s_groupID state)
+      , statSpecialDeviceID = 0
+      , statFileSize = 0
+      , statBlocks = 0
+      , statAccessTime = (s_mountTime state)
+      , statModificationTime = (s_mountTime state)
+      , statStatusChangeTime = (s_mountTime state)
+      }
+
+  
+  

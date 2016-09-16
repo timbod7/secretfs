@@ -9,8 +9,8 @@ import System.Posix.Files(setFileSize)
 
 import System.SecretFS.Core
 
-regularFile :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
-regularFile state path mode flags = logcall "regularFile" state path $ do
+regularFileOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
+regularFileOpen state path mode flags = logcall "regularFile" state path $ do
   let rpath = realPath state path
   h <- (openFile rpath (convertMode mode flags))
   return SHandle {

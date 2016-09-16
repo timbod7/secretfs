@@ -14,9 +14,11 @@ import Control.Exception(handle,catch,throwIO)
 import Control.Monad
 import Control.Monad.STM
 import Control.Concurrent.STM.TVar
+import Data.Time.Clock.POSIX(getPOSIXTime)
 import System.IO
-import System.Posix.Types(ByteCount,FileOffset,EpochTime)
+import System.Posix.Types(ByteCount,FileOffset,EpochTime,UserID,GroupID)
 import System.Posix.Files
+import System.Posix.User(getRealUserID,getRealGroupID)
 import System.Directory
 import System.FilePath
 import System.Fuse
@@ -35,10 +37,16 @@ data SecretFSConfig = SecretFSConfig {
 
 createSecretFS :: SecretFSConfig -> IO (FuseOperations SHandle)
 createSecretFS config = do
+  mountTime <- (fromIntegral . round) <$> getPOSIXTime
+  userID <- getRealUserID
+  groupID <- getRealGroupID
   state <- State
     <$> pure (sc_srcDir config)
     <*> pure (sc_keyPhrase config)
     <*> pure (sc_log config)
+    <*> pure userID
+    <*> pure groupID
+    <*> pure mountTime
     <*> atomically (newTVar M.empty)
   return $ defaultFuseOps
     { fuseGetFileStat        = secretGetFileStat state
@@ -54,15 +62,22 @@ createSecretFS config = do
 
 secretGetFileStat :: State -> FilePath -> IO (Either Errno FileStat)
 secretGetFileStat state path = logcall "secretGetFileStat" state path $ do
-  exceptionToEither state (convertStatus <$> getFileStatus (realPath state path))
+  exceptionToEither state (getFileStat state path)
+
+getFileStat :: State -> FilePath -> IO FileStat
+getFileStat state path = do
+  dc <- getDirConfig state (takeDirectory path)
+  case M.lookup (takeFileName path) (dc_fileTypes dc) of
+    (Just Encrypted) -> encryptedGetFileStat state path
+    _ -> convertStatus <$> getFileStatus (realPath state path)
 
 secretOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno SHandle)
 secretOpen state path mode flags = exceptionToEither state $ logcall "secretOpen" state path $ do
   ftype <- getFileType state path
   case ftype of
-    Regular ->   regularFile state path mode flags
-    Encrypted -> encryptedFile state path (s_keyPhrase state)
-    Interpolated -> interpolatedFile state path mode flags
+    Regular -> regularFileOpen state path mode flags
+    Encrypted -> encryptedFileOpen state path mode flags
+    Interpolated -> interpolatedFileOpen state path mode flags
 
 secretRead  :: State -> FilePath -> SHandle -> ByteCount -> FileOffset -> IO (Either Errno BS.ByteString)
 secretRead state path sh byteCount offset = exceptionToEither state (sh_read sh byteCount offset)
@@ -78,7 +93,7 @@ secretSetFileSize state path offset = exceptionToErrno state $ logcall "secretSe
   ftype <- getFileType state path
   case ftype of
     Regular ->   regularFileSetSize state path offset
-    Encrypted -> throwIO (SException "unimplemented" (Just path) eFAULT)
+    Encrypted -> encryptedFileSetSize state path offset
     Interpolated -> throwIO (SException "unimplemented" (Just path) eFAULT)
 
 secretOpenDirectory :: State -> FilePath -> IO Errno
@@ -90,13 +105,28 @@ secretOpenDirectory state path = logcall "secretOpenDirectory" state path $ do
       False -> return eNOENT
 
 secretReadDirectory :: State ->FilePath -> IO (Either Errno [(FilePath, FileStat)])
-secretReadDirectory state path = logcall "secretReadDirectory" state path $ do
+secretReadDirectory state path = logcall "secretReadDirectory" state path $ exceptionToEither state $ do
   let basedir = realPath state path
-  exceptionToEither state $ do
+
+  -- Read the contents of the directory
+  items <- do
     contents <- getDirectoryContents basedir
     forM (filter nonSpecial contents) $ \file -> do
-      stats <- getFileStatus (basedir </> file)
-      return (file,convertStatus stats)
+      stat <- getFileStat state (path </> file)
+      return (file,stat)
+
+  -- Generate any extra items corresponding to empty encrypted
+  -- files
+  extraItems <- do
+    dc <- getDirConfig state path
+    let files = S.fromList (map fst items)
+        extraEncFiles = [file | (file,Encrypted) <- M.toList (dc_fileTypes dc), not (S.member file files)]
+    forM extraEncFiles $ \file -> do
+      stat <- getFileStat state (path </> file)
+      return (file,stat)
+      
+  return (items ++ extraItems)
+      
   where
     nonSpecial "." = False
     nonSpecial ".." = False

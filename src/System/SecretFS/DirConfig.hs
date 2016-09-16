@@ -56,7 +56,7 @@ loadDirConfig state path = logcall "loadDirConfig" state path $ do
       content <- LBS.readFile cpath
       case JSON.decode content of
        (Just dirConfig) -> return dirConfig
-       Nothing -> throwIO (SException "Invalide .secretfs file" (Just cpath) eFAULT)
+       Nothing -> throwIO (SException "Invalid .secretfs file" (Just cpath) eFAULT)
     else do
       return (DirConfig M.empty)
 

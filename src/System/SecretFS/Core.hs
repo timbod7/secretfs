@@ -8,7 +8,7 @@ import Control.Concurrent.STM.TVar
 import Control.Exception(handle,catch,fromException,throwIO,SomeException,Exception)
 import Data.Typeable
 import GHC.IO.Exception(IOException(..),ioException)
-import System.Posix.Types(ByteCount,FileOffset,EpochTime)
+import System.Posix.Types(ByteCount,FileOffset,UserID,GroupID,EpochTime)
 import System.FilePath.Posix( (</>) )
 import System.Fuse
 import System.Posix.Files
@@ -29,6 +29,9 @@ data State = State {
   s_srcDir :: FilePath,
   s_keyPhrase :: KeyPhrase,
   s_log :: BS.ByteString -> IO (),
+  s_userID :: UserID,
+  s_groupID :: GroupID,
+  s_mountTime :: EpochTime,
   s_dirConfigs :: TVar (M.Map FilePath (DirConfig,EpochTime))
   }
 

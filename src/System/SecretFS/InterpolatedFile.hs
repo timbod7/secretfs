@@ -10,7 +10,7 @@ import System.Fuse
 import System.SecretFS.Core
 
 
-interpolatedFile :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
-interpolatedFile state path ReadOnly _ = undefined
-interpolatedFile _ path _ _ = throwIO (SException "Interpolated files are readonly" (Just path) ePERM)
+interpolatedFileOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
+interpolatedFileOpen state path ReadOnly _ = undefined
+interpolatedFileOpen _ path _ _ = throwIO (SException "Interpolated files are readonly" (Just path) ePERM)
 
