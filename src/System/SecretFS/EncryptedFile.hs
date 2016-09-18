@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
-module System.SecretFS.EncryptedFile where
+module System.SecretFS.EncryptedFile(
+  encryptedFileOps
+  ) where
 
 import qualified Data.ByteString.Char8 as BS
 
@@ -20,6 +22,13 @@ import System.SecretFS.Core
 data EncFileState = EncFileState
   { efs_cleartext :: BS.ByteString
   , efs_dirty :: Bool
+  }
+
+encryptedFileOps :: State -> FilePath -> IO FileOps
+encryptedFileOps state filepath = return FileOps{
+  fo_open=encryptedFileOpen state filepath,
+  fo_getFileStat=encryptedGetFileStat state filepath,
+  fo_setFileSize=encryptedFileSetSize state filepath
   }
 
 encryptedFileOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle

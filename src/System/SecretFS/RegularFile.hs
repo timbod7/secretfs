@@ -1,13 +1,22 @@
-module System.SecretFS.RegularFile where
+module System.SecretFS.RegularFile(
+  regularFileOps
+  ) where
 
 import qualified Data.ByteString.Char8 as BS
 
-import System.Fuse(OpenMode,OpenFileFlags)
+import System.Fuse(OpenMode,OpenFileFlags,FileStat)
 import System.IO(IOMode(..),SeekMode(..),openFile,hClose,hSeek)
 import System.Posix.Types(ByteCount,FileOffset,EpochTime)
-import System.Posix.Files(setFileSize)
+import System.Posix.Files(setFileSize,getFileStatus)
 
 import System.SecretFS.Core
+
+regularFileOps :: State -> FilePath -> IO FileOps
+regularFileOps state filepath = return FileOps{
+  fo_open=regularFileOpen state filepath,
+  fo_getFileStat=regularFileGetStat state filepath,
+  fo_setFileSize=regularFileSetSize state filepath
+  }
 
 regularFileOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
 regularFileOpen state path mode flags = logcall "regularFile" state path $ do
@@ -29,6 +38,9 @@ regularFileOpen state path mode flags = logcall "regularFile" state path $ do
       hSeek h AbsoluteSeek (fromIntegral offset)
       BS.hPut h content
       return (fromIntegral (BS.length content))
+
+regularFileGetStat :: State -> FilePath -> IO FileStat
+regularFileGetStat state path = convertStatus <$> getFileStatus (realPath state path)
 
 regularFileSetSize :: State -> FilePath -> FileOffset -> IO ()
 regularFileSetSize state path offset =  setFileSize (realPath state path) offset

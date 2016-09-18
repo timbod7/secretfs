@@ -35,11 +35,18 @@ data State = State {
   s_dirConfigs :: TVar (M.Map FilePath (DirConfig,EpochTime))
   }
 
+data FileOps = FileOps {
+  fo_open :: OpenMode -> OpenFileFlags -> IO SHandle,
+  fo_getFileStat :: IO FileStat,
+  fo_setFileSize :: FileOffset -> IO ()
+}
+
 data SHandle = SHandle {
   sh_flush :: IO (),
   sh_read :: ByteCount -> FileOffset -> IO BS.ByteString,
   sh_write :: BS.ByteString -> FileOffset -> IO ByteCount
   }
+
 
 -- | An IO related exception type that doesn't reference
 -- ghc internals

@@ -1,4 +1,6 @@
-module System.SecretFS.InterpolatedFile where
+module System.SecretFS.InterpolatedFile(
+  interpolatedFileOps
+  ) where
 
 import qualified Data.ByteString.Char8 as BS
 
@@ -9,6 +11,8 @@ import System.Fuse
 
 import System.SecretFS.Core
 
+interpolatedFileOps :: State -> FilePath -> IO FileOps
+interpolatedFileOps state filepath = undefined
 
 interpolatedFileOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
 interpolatedFileOpen state path ReadOnly _ = undefined

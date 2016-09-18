@@ -66,19 +66,22 @@ secretGetFileStat state path = logcall "secretGetFileStat" state path $ do
 
 getFileStat :: State -> FilePath -> IO FileStat
 getFileStat state path = do
-  dc <- getDirConfig state (takeDirectory path)
-  case M.lookup (takeFileName path) (dc_fileTypes dc) of
-    (Just Encrypted) -> encryptedGetFileStat state path
-    _ -> convertStatus <$> getFileStatus (realPath state path)
+  ftype <- getFileType state path
+  fo <- case ftype of
+    Regular -> regularFileOps state path
+    Encrypted -> encryptedFileOps state path
+    Interpolated -> interpolatedFileOps state path
+  fo_getFileStat fo
 
 secretOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno SHandle)
 secretOpen state path mode flags = exceptionToEither state $ logcall "secretOpen" state path $ do
   ftype <- getFileType state path
-  case ftype of
-    Regular -> regularFileOpen state path mode flags
-    Encrypted -> encryptedFileOpen state path mode flags
-    Interpolated -> interpolatedFileOpen state path mode flags
-
+  fo <- case ftype of
+    Regular -> regularFileOps state path
+    Encrypted -> encryptedFileOps state path
+    Interpolated -> interpolatedFileOps state path
+  fo_open fo mode flags
+  
 secretRead  :: State -> FilePath -> SHandle -> ByteCount -> FileOffset -> IO (Either Errno BS.ByteString)
 secretRead state path sh byteCount offset = exceptionToEither state (sh_read sh byteCount offset)
 
@@ -91,10 +94,11 @@ secretFlush state _ sh =  exceptionToErrno state (sh_flush sh)
 secretSetFileSize :: State -> FilePath -> FileOffset -> IO Errno
 secretSetFileSize state path offset = exceptionToErrno state $ logcall "secretSetFileSize" state path $ do
   ftype <- getFileType state path
-  case ftype of
-    Regular ->   regularFileSetSize state path offset
-    Encrypted -> encryptedFileSetSize state path offset
-    Interpolated -> throwIO (SException "unimplemented" (Just path) eFAULT)
+  fo <- case ftype of
+    Regular -> regularFileOps state path
+    Encrypted -> encryptedFileOps state path
+    Interpolated -> interpolatedFileOps state path
+  fo_setFileSize fo offset
 
 secretOpenDirectory :: State -> FilePath -> IO Errno
 secretOpenDirectory state path = logcall "secretOpenDirectory" state path $ do
