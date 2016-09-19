@@ -64,22 +64,9 @@ secretGetFileStat :: State -> FilePath -> IO (Either Errno FileStat)
 secretGetFileStat state path = logcall "secretGetFileStat" state path $ do
   exceptionToEither state (getFileStat state path)
 
-getFileStat :: State -> FilePath -> IO FileStat
-getFileStat state path = do
-  ftype <- getFileType state path
-  fo <- case ftype of
-    Regular -> regularFileOps state path
-    Encrypted -> encryptedFileOps state path
-    Interpolated -> interpolatedFileOps state path
-  fo_getFileStat fo
-
 secretOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno SHandle)
 secretOpen state path mode flags = exceptionToEither state $ logcall "secretOpen" state path $ do
-  ftype <- getFileType state path
-  fo <- case ftype of
-    Regular -> regularFileOps state path
-    Encrypted -> encryptedFileOps state path
-    Interpolated -> interpolatedFileOps state path
+  fo <- getFileOps state path
   fo_open fo mode flags
   
 secretRead  :: State -> FilePath -> SHandle -> ByteCount -> FileOffset -> IO (Either Errno BS.ByteString)
@@ -93,11 +80,7 @@ secretFlush state _ sh =  exceptionToErrno state (sh_flush sh)
 
 secretSetFileSize :: State -> FilePath -> FileOffset -> IO Errno
 secretSetFileSize state path offset = exceptionToErrno state $ logcall "secretSetFileSize" state path $ do
-  ftype <- getFileType state path
-  fo <- case ftype of
-    Regular -> regularFileOps state path
-    Encrypted -> encryptedFileOps state path
-    Interpolated -> interpolatedFileOps state path
+  fo <- getFileOps state path
   fo_setFileSize fo offset
 
 secretOpenDirectory :: State -> FilePath -> IO Errno
@@ -149,3 +132,13 @@ secretGetFileSystemStats state str = do
     , fsStatMaxNameLength = 255 -- FIXME
     }
 
+getFileStat :: State -> FilePath -> IO FileStat
+getFileStat state path = getFileOps state path >>= fo_getFileStat
+
+getFileOps :: State -> FilePath -> IO FileOps
+getFileOps state path = do
+  ftype <- getFileType state path
+  case ftype of
+    Regular -> regularFileOps state path
+    Encrypted -> encryptedFileOps state path
+    Interpolated -> interpolatedFileOps state path

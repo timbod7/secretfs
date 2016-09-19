@@ -25,94 +25,66 @@ data EncFileState = EncFileState
   }
 
 encryptedFileOps :: State -> FilePath -> IO FileOps
-encryptedFileOps state filepath = return FileOps{
-  fo_open=encryptedFileOpen state filepath,
-  fo_getFileStat=encryptedGetFileStat state filepath,
-  fo_setFileSize=encryptedFileSetSize state filepath
-  }
-
-encryptedFileOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
-encryptedFileOpen state path _ _ = do
+encryptedFileOps state path = do
+  let rpath = realPath state path
   exists <- doesFileExist rpath
-  istate <- if exists
+  efstate <- if exists
     then do
-      clearText <- decryptReadFile rpath (s_keyPhrase state)
-      return (EncFileState clearText False)
+      cleartext <- decryptReadFile rpath (s_keyPhrase state)
+      return (EncFileState cleartext False)
      else do
       return (EncFileState "" True)
-              
-  efstate <- atomically $ newTVar istate
+  efstatev <- atomically (newTVar efstate)
+
+  return FileOps{
+    fo_open=encryptedFileOpen efstatev state path,
+    fo_getFileStat=encryptedGetFileStat efstatev state path,
+    fo_setFileSize=encryptedFileSetSize efstatev state path
+    }
+
+encryptedFileOpen :: TVar EncFileState -> State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
+encryptedFileOpen efstatev state path _ _ = do
   return SHandle {
-    sh_flush = flushFile efstate,
-    sh_read = readFile efstate,
-    sh_write = writeFile efstate
+    sh_flush = flushFile,
+    sh_read = readFile,
+    sh_write = writeFile
     }
 
   where
-    rpath :: FilePath
-    rpath = realPath state path
-
-    readFile :: TVar EncFileState -> ByteCount -> FileOffset -> IO BS.ByteString
-    readFile efstate byteCount offset = logcall "encryptedFile.read" state rpath $ do
-      (EncFileState cleartext dirty) <- atomically (readTVar efstate)
+    readFile :: ByteCount -> FileOffset -> IO BS.ByteString
+    readFile byteCount offset = logcall "encryptedFile.read" state path $ do
+      (EncFileState cleartext dirty) <- atomically (readTVar efstatev)
       return (BS.take (fromIntegral byteCount) (BS.drop (fromIntegral offset) cleartext))
 
-    writeFile :: TVar EncFileState -> BS.ByteString -> FileOffset -> IO ByteCount
-    writeFile efstate content offset = logcall "encryptedFile.write" state path $ do
-      (EncFileState cleartext dirty) <- atomically (readTVar efstate)
-      let lencleartext = BS.length cleartext
-          lencontent = BS.length content
-          offset' = fromIntegral offset
-
-          -- FIXME: efficiency: perhaps a lazy bytestring or some other structure?
-          cleartext' = BS.concat
-            [ BS.take offset' cleartext
-            , if offset' > lencleartext then BS.replicate (offset' - lencleartext) (toEnum 0) else ""
-            , content
-            , BS.drop (offset' + lencontent) cleartext
-            ]
-      atomically (writeTVar efstate (EncFileState cleartext' True))
+    writeFile :: BS.ByteString -> FileOffset -> IO ByteCount
+    writeFile content offset = logcall "encryptedFile.write" state path $ do
+      let lencontent = BS.length content
+      modifyClearText efstatev $ \cleartext -> 
+        let lencleartext = BS.length cleartext
+            offset' = fromIntegral offset
+        -- FIXME: efficiency: perhaps a lazy bytestring or some other structure?
+        in BS.concat
+             [ BS.take offset' cleartext
+             , if offset' > lencleartext then BS.replicate (offset' - lencleartext) (toEnum 0) else ""
+             , content
+             , BS.drop (offset' + lencontent) cleartext
+             ]
       return (fromIntegral lencontent)
 
-    flushFile :: TVar EncFileState -> IO ()
-    flushFile efstate = logcall "encryptedFile.flush" state path $ do
-      (EncFileState cleartext dirty) <- atomically (readTVar efstate)
-      when dirty $ encryptWriteFile rpath (s_keyPhrase state) cleartext
+    flushFile :: IO ()
+    flushFile = logcall "encryptedFile.flush" state path $ do
+      writeIfDirty efstatev state path
 
-decryptReadFile :: FilePath -> KeyPhrase -> IO BS.ByteString
-decryptReadFile path keyphrase = do
-  cipherText <- BS.readFile path
-  return (decrypt cipherText keyphrase)
-
-encryptWriteFile :: FilePath -> KeyPhrase -> BS.ByteString -> IO ()
-encryptWriteFile path keyphrase cleartext = do
-  hdr <- newRNCryptorHeader keyphrase
-  let ctx = newRNCryptorContext keyphrase hdr
-  let cipherText = encrypt ctx cleartext
-  BS.writeFile path cipherText
-
-encryptedFileSetSize :: State -> FilePath -> FileOffset -> IO ()
-encryptedFileSetSize state path size =  do
+encryptedGetFileStat :: TVar EncFileState -> State -> FilePath -> IO FileStat
+encryptedGetFileStat efstatev state path = do
+  efstate <- atomically (readTVar efstatev)
   exists <- doesFileExist rpath
-  when exists $ do
-    clearText <- decryptReadFile rpath (s_keyPhrase state)
-    when (BS.length clearText /= fromIntegral size) $ do
-      let clearText' = BS.take (fromIntegral size) clearText
-      encryptWriteFile rpath clearText' (s_keyPhrase state)
-  where
-    rpath = realPath state path
-
-encryptedGetFileStat :: State -> FilePath -> IO FileStat
-encryptedGetFileStat state path = do
-  exists <- doesFileExist rpath
-  if exists
+  fileStat <- if exists
     then do
-      fileStat <- convertStatus <$> getFileStatus rpath
-      -- Need some sort of caching for this
-      clearTextLength <- BS.length <$> decryptReadFile rpath (s_keyPhrase state)
-      return fileStat{statFileSize=fromIntegral clearTextLength}
-      
+      convertStatus <$> getFileStatus rpath
     else return newFileStat
+  let clearTextLength =  BS.length (efs_cleartext efstate)
+  return fileStat{statFileSize=fromIntegral clearTextLength}
   where
     rpath = realPath state path
     newFileStat = FileStat
@@ -129,5 +101,38 @@ encryptedGetFileStat state path = do
       , statStatusChangeTime = (s_mountTime state)
       }
 
+encryptedFileSetSize :: TVar EncFileState -> State -> FilePath -> FileOffset -> IO ()
+encryptedFileSetSize efstatev state path size =  do
+  modifyClearText efstatev (BS.take (fromIntegral size))
+  writeIfDirty efstatev state path
+
+modifyClearText :: TVar EncFileState ->  (BS.ByteString -> BS.ByteString) -> IO ()
+modifyClearText efstatev updatef = do
+  atomically $ do
+    efstate <- readTVar efstatev
+    let cleartext' = updatef (efs_cleartext efstate)
+    when (cleartext' /= efs_cleartext efstate) $ do
+      writeTVar efstatev efstate{efs_cleartext=cleartext',efs_dirty=True}
+
+writeIfDirty :: TVar EncFileState -> State -> FilePath -> IO ()
+writeIfDirty efstatev state path = do
+  efstate <- atomically (readTVar efstatev)
+  when (efs_dirty efstate) $ do
+    encryptWriteFile rpath (s_keyPhrase state) (efs_cleartext efstate)
+    atomically $ modifyTVar efstatev (\efs -> efs{efs_dirty=False})
+  where
+    rpath = realPath state path
+
+decryptReadFile :: FilePath -> KeyPhrase -> IO BS.ByteString
+decryptReadFile path keyphrase = do
+  cipherText <- BS.readFile path
+  return (decrypt cipherText keyphrase)
+
+encryptWriteFile :: FilePath -> KeyPhrase -> BS.ByteString -> IO ()
+encryptWriteFile path keyphrase cleartext = do
+  hdr <- newRNCryptorHeader keyphrase
+  let ctx = newRNCryptorContext keyphrase hdr
+  let cipherText = encrypt ctx cleartext
+  BS.writeFile path cipherText
   
   
