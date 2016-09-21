@@ -24,6 +24,7 @@ data MagicFileType
   = Regular
   | Encrypted
   | Interpolated
+  deriving (Eq,Show)
 
 data State = State {
   s_srcDir :: FilePath,
@@ -32,7 +33,8 @@ data State = State {
   s_userID :: UserID,
   s_groupID :: GroupID,
   s_mountTime :: EpochTime,
-  s_dirConfigs :: TVar (M.Map FilePath (DirConfig,EpochTime))
+  s_dirConfigs :: TVar (M.Map FilePath (DirConfig,EpochTime)),
+  s_fileOps :: TVar (M.Map FilePath (MagicFileType,FileOps))
   }
 
 data FileOps = FileOps {

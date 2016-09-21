@@ -48,6 +48,7 @@ createSecretFS config = do
     <*> pure groupID
     <*> pure mountTime
     <*> atomically (newTVar M.empty)
+    <*> atomically (newTVar M.empty)
   return $ defaultFuseOps
     { fuseGetFileStat        = secretGetFileStat state
     , fuseOpen               = secretOpen state
@@ -138,7 +139,19 @@ getFileStat state path = getFileOps state path >>= fo_getFileStat
 getFileOps :: State -> FilePath -> IO FileOps
 getFileOps state path = do
   ftype <- getFileType state path
-  case ftype of
-    Regular -> regularFileOps state path
-    Encrypted -> encryptedFileOps state path
-    Interpolated -> interpolatedFileOps state path
+  opsmap <- atomically (readTVar (s_fileOps state))
+  -- Use the cached operations if there is an entry in the
+  -- map and the file type hasnt changed
+  case M.lookup path opsmap of
+    (Just (ftype',fops)) | ftype' == ftype -> do
+      return fops                      
+    _ -> do 
+      fops <- getFileOps' state path ftype
+      atomically $ modifyTVar (s_fileOps state) (M.insert path (ftype,fops))
+      return fops
+
+getFileOps' :: State -> FilePath -> MagicFileType -> IO FileOps
+getFileOps' state path ftype = case ftype of
+  Regular -> regularFileOps state path
+  Encrypted -> encryptedFileOps state path
+  Interpolated -> interpolatedFileOps state path
