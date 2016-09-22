@@ -5,6 +5,7 @@ module System.SecretFS.EncryptedFile(
 
 import qualified Data.ByteString.Char8 as BS
 
+import Control.Exception(throwIO)
 import Control.Monad
 import Control.Monad.STM
 import Control.Concurrent.STM.TVar
@@ -12,7 +13,7 @@ import Crypto.RNCryptor.V3.Decrypt(decrypt)
 import Crypto.RNCryptor.V3.Encrypt(encrypt)
 import Crypto.RNCryptor.Types(newRNCryptorContext,newRNCryptorHeader)
 import System.Directory(doesFileExist)
-import System.Fuse(OpenMode,OpenFileFlags,FileStat(..),EntryType(..))
+import System.Fuse(OpenMode,OpenFileFlags,FileStat(..),EntryType(..),ePERM)
 import System.IO(IOMode(..),SeekMode(..),openFile,hClose,hSeek)
 import System.Posix.Types(ByteCount,FileOffset,EpochTime)
 import System.Posix.Files(getFileStatus)
@@ -39,7 +40,8 @@ encryptedFileOps state path = do
   return FileOps{
     fo_open=encryptedFileOpen efstatev state path,
     fo_getFileStat=encryptedGetFileStat efstatev state path,
-    fo_setFileSize=encryptedFileSetSize efstatev state path
+    fo_setFileSize=encryptedFileSetSize efstatev state path,
+    fo_createDevice=(\_ _ _ -> throwIO (SException "Encrypted files cannot be created" (Just path) ePERM))
     }
 
 encryptedFileOpen :: TVar EncFileState -> State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle

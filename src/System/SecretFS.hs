@@ -14,9 +14,10 @@ import Control.Exception(handle,catch,throwIO)
 import Control.Monad
 import Control.Monad.STM
 import Control.Concurrent.STM.TVar
+import Data.Monoid
 import Data.Time.Clock.POSIX(getPOSIXTime)
 import System.IO
-import System.Posix.Types(ByteCount,FileOffset,EpochTime,UserID,GroupID)
+import System.Posix.Types(ByteCount,FileOffset,EpochTime,UserID,GroupID,FileMode,DeviceID)
 import System.Posix.Files
 import System.Posix.User(getRealUserID,getRealGroupID)
 import System.Directory
@@ -49,21 +50,46 @@ createSecretFS config = do
     <*> pure mountTime
     <*> atomically (newTVar M.empty)
     <*> atomically (newTVar M.empty)
-  return $ defaultFuseOps
+  return $ FuseOperations
     { fuseGetFileStat        = secretGetFileStat state
+    , fuseReadSymbolicLink   = \_ -> Left <$> unimp "fuseReadSymbolicLink"
+    , fuseCreateDevice       = secretCreateDevice state
+    , fuseCreateDirectory    = \_ _ -> unimp "fuseCreateDirectory"
+    , fuseRemoveLink         = \_ -> unimp "fuseRemoveLink"
+    , fuseRemoveDirectory    = \_ -> unimp "fuseRemoveDirectory"
+    , fuseCreateSymbolicLink = \_ _ -> unimp "fuseCreateSymbolicLink"
+    , fuseRename             = \_ _ -> unimp "fuseRename"
+    , fuseCreateLink         = \_ _ -> unimp "fuseCreateLink"
+    , fuseSetFileMode        = \_ _ -> unimp "fuseSetFileMode"
+    , fuseSetOwnerAndGroup   = \_ _ _ -> unimp "fuseSetOwnerAndGroup"
+    , fuseSetFileSize        = secretSetFileSize state
+    , fuseSetFileTimes       = \_ _ _ -> unimp "fuseSetFileTimes"
     , fuseOpen               = secretOpen state
-    , fuseFlush              = secretFlush state
     , fuseRead               = secretRead state
     , fuseWrite              = secretWrite state
-    , fuseSetFileSize        = secretSetFileSize state
+    , fuseGetFileSystemStats = secretGetFileSystemStats state
+    , fuseFlush              = secretFlush state
+    , fuseRelease            = \_ _ -> return ()
+    , fuseSynchronizeFile    = \_ _ -> unimp "fuseSynchronizeFile"
     , fuseOpenDirectory      = secretOpenDirectory state
     , fuseReadDirectory      = secretReadDirectory state
-    , fuseGetFileSystemStats = secretGetFileSystemStats state
+    , fuseReleaseDirectory   = \_ -> unimp "fuseReleaseDirectory"
+    , fuseSynchronizeDirectory = \_ _ -> unimp " fuseSynchronizeDirectory"
+    , fuseAccess             = \_ _ -> unimp "fuseAccess"
+    , fuseInit               = return ()
+    , fuseDestroy            = return ()
     }
+  where
+    unimp name = sc_log config (name <> " not implemented") >> return eNOSYS
 
 secretGetFileStat :: State -> FilePath -> IO (Either Errno FileStat)
 secretGetFileStat state path = logcall "secretGetFileStat" state path $ do
   exceptionToEither state (getFileStat state path)
+
+secretCreateDevice :: State -> FilePath -> EntryType -> FileMode -> DeviceID -> IO Errno
+secretCreateDevice state path entryType fileMode deviceId = do
+  fo <- getFileOps state path
+  exceptionToErrno state (fo_createDevice fo entryType fileMode deviceId)  
 
 secretOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno SHandle)
 secretOpen state path mode flags = exceptionToEither state $ logcall "secretOpen" state path $ do

@@ -8,7 +8,7 @@ import Control.Concurrent.STM.TVar
 import Control.Exception(handle,catch,fromException,throwIO,SomeException,Exception)
 import Data.Typeable
 import GHC.IO.Exception(IOException(..),ioException)
-import System.Posix.Types(ByteCount,FileOffset,UserID,GroupID,EpochTime)
+import System.Posix.Types(ByteCount,FileOffset,UserID,GroupID,EpochTime,FileMode,DeviceID)
 import System.FilePath.Posix( (</>) )
 import System.Fuse
 import System.Posix.Files
@@ -40,7 +40,8 @@ data State = State {
 data FileOps = FileOps {
   fo_open :: OpenMode -> OpenFileFlags -> IO SHandle,
   fo_getFileStat :: IO FileStat,
-  fo_setFileSize :: FileOffset -> IO ()
+  fo_setFileSize :: FileOffset -> IO (),
+  fo_createDevice :: EntryType -> FileMode -> DeviceID -> IO ()
 }
 
 data SHandle = SHandle {
