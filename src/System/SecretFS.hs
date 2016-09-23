@@ -50,65 +50,73 @@ createSecretFS config = do
     <*> pure mountTime
     <*> atomically (newTVar M.empty)
     <*> atomically (newTVar M.empty)
-  return $ FuseOperations
-    { fuseGetFileStat        = secretGetFileStat state
+  return (mkFuseOperations config state)
+
+mkFuseOperations :: SecretFSConfig -> State -> FuseOperations SHandle
+mkFuseOperations config state = FuseOperations
+    { fuseGetFileStat        = getFileStat
     , fuseReadSymbolicLink   = \_ -> Left <$> unimp "fuseReadSymbolicLink"
-    , fuseCreateDevice       = secretCreateDevice state
+    , fuseCreateDevice       = createDevice
     , fuseCreateDirectory    = \_ _ -> unimp "fuseCreateDirectory"
-    , fuseRemoveLink         = \_ -> unimp "fuseRemoveLink"
+    , fuseRemoveLink         = removeLink
     , fuseRemoveDirectory    = \_ -> unimp "fuseRemoveDirectory"
     , fuseCreateSymbolicLink = \_ _ -> unimp "fuseCreateSymbolicLink"
     , fuseRename             = \_ _ -> unimp "fuseRename"
     , fuseCreateLink         = \_ _ -> unimp "fuseCreateLink"
-    , fuseSetFileMode        = \_ _ -> unimp "fuseSetFileMode"
+    , fuseSetFileMode        = setFileMode
     , fuseSetOwnerAndGroup   = \_ _ _ -> unimp "fuseSetOwnerAndGroup"
-    , fuseSetFileSize        = secretSetFileSize state
+    , fuseSetFileSize        = setFileSize
     , fuseSetFileTimes       = \_ _ _ -> unimp "fuseSetFileTimes"
-    , fuseOpen               = secretOpen state
-    , fuseRead               = secretRead state
-    , fuseWrite              = secretWrite state
+    , fuseOpen               = open
+    , fuseRead               = read
+    , fuseWrite              = write
     , fuseGetFileSystemStats = secretGetFileSystemStats state
-    , fuseFlush              = secretFlush state
+    , fuseFlush              = flush
     , fuseRelease            = \_ _ -> return ()
     , fuseSynchronizeFile    = \_ _ -> unimp "fuseSynchronizeFile"
     , fuseOpenDirectory      = secretOpenDirectory state
     , fuseReadDirectory      = secretReadDirectory state
-    , fuseReleaseDirectory   = \_ -> unimp "fuseReleaseDirectory"
+    , fuseReleaseDirectory   = \_ -> return eOK
     , fuseSynchronizeDirectory = \_ _ -> unimp " fuseSynchronizeDirectory"
-    , fuseAccess             = \_ _ -> unimp "fuseAccess"
+    , fuseAccess             = access
     , fuseInit               = return ()
     , fuseDestroy            = return ()
     }
   where
-    unimp name = sc_log config (name <> " not implemented") >> return eNOSYS
+    getFileStat path = logcall "secretGetFileStat" state path $ do
+      exceptionToEither state (getFileOps state path >>= fo_getFileStat)
 
-secretGetFileStat :: State -> FilePath -> IO (Either Errno FileStat)
-secretGetFileStat state path = logcall "secretGetFileStat" state path $ do
-  exceptionToEither state (getFileStat state path)
+    createDevice path entryType fileMode deviceId = do
+      fo <- getFileOps state path
+      exceptionToErrno state (fo_createDevice fo entryType fileMode deviceId)  
 
-secretCreateDevice :: State -> FilePath -> EntryType -> FileMode -> DeviceID -> IO Errno
-secretCreateDevice state path entryType fileMode deviceId = do
-  fo <- getFileOps state path
-  exceptionToErrno state (fo_createDevice fo entryType fileMode deviceId)  
+    removeLink path = do
+      fo <- getFileOps state path
+      exceptionToErrno state (fo_removeLink fo)  
+      
+    setFileMode path fileMode = do
+      fo <- getFileOps state path
+      exceptionToErrno state (fo_setFileMode fo fileMode)  
 
-secretOpen :: State -> FilePath -> OpenMode -> OpenFileFlags -> IO (Either Errno SHandle)
-secretOpen state path mode flags = exceptionToEither state $ logcall "secretOpen" state path $ do
-  fo <- getFileOps state path
-  fo_open fo mode flags
+    setFileSize  path offset = exceptionToErrno state $ do
+      fo <- getFileOps state path
+      fo_setFileSize fo offset
+
+    open path mode flags = exceptionToEither state $ do
+      fo <- getFileOps state path
+      fo_open fo mode flags
   
-secretRead  :: State -> FilePath -> SHandle -> ByteCount -> FileOffset -> IO (Either Errno BS.ByteString)
-secretRead state path sh byteCount offset = exceptionToEither state (sh_read sh byteCount offset)
+    flush _ sh =  exceptionToErrno state (sh_flush sh)
 
-secretWrite  :: State -> FilePath -> SHandle -> BS.ByteString -> FileOffset -> IO (Either Errno ByteCount)
-secretWrite state path sh content offset = exceptionToEither state (sh_write sh content offset)
+    read path sh byteCount offset = exceptionToEither state (sh_read sh byteCount offset)
 
-secretFlush :: State -> FilePath -> SHandle -> IO Errno
-secretFlush state _ sh =  exceptionToErrno state (sh_flush sh)
+    write path sh content offset = exceptionToEither state (sh_write sh content offset)
 
-secretSetFileSize :: State -> FilePath -> FileOffset -> IO Errno
-secretSetFileSize state path offset = exceptionToErrno state $ logcall "secretSetFileSize" state path $ do
-  fo <- getFileOps state path
-  fo_setFileSize fo offset
+    access path perms = exceptionToErrno state $ do
+      fo <- getFileOps state path
+      fo_access fo perms
+
+    unimp name = sc_log config ("** BUG: " <> name <> " not implemented") >> return eNOSYS
 
 secretOpenDirectory :: State -> FilePath -> IO Errno
 secretOpenDirectory state path = logcall "secretOpenDirectory" state path $ do
@@ -142,6 +150,8 @@ secretReadDirectory state path = logcall "secretReadDirectory" state path $ exce
   return (items ++ extraItems)
       
   where
+    getFileStat state path = getFileOps state path >>= fo_getFileStat
+
     nonSpecial "." = False
     nonSpecial ".." = False
     nonSpecial _ = True
@@ -158,9 +168,6 @@ secretGetFileSystemStats state str = do
     , fsStatFilesFree  = 10     -- FIXME
     , fsStatMaxNameLength = 255 -- FIXME
     }
-
-getFileStat :: State -> FilePath -> IO FileStat
-getFileStat state path = getFileOps state path >>= fo_getFileStat
 
 getFileOps :: State -> FilePath -> IO FileOps
 getFileOps state path = do

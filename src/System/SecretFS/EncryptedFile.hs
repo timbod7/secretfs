@@ -16,7 +16,7 @@ import System.Directory(doesFileExist)
 import System.Fuse(OpenMode,OpenFileFlags,FileStat(..),EntryType(..),ePERM)
 import System.IO(IOMode(..),SeekMode(..),openFile,hClose,hSeek)
 import System.Posix.Types(ByteCount,FileOffset,EpochTime)
-import System.Posix.Files(getFileStatus)
+import System.Posix.Files(getFileStatus,fileAccess)
 
 import System.SecretFS.Core
 
@@ -41,7 +41,10 @@ encryptedFileOps state path = do
     fo_open=encryptedFileOpen efstatev state path,
     fo_getFileStat=encryptedGetFileStat efstatev state path,
     fo_setFileSize=encryptedFileSetSize efstatev state path,
-    fo_createDevice=(\_ _ _ -> throwIO (SException "Encrypted files cannot be created" (Just path) ePERM))
+    fo_createDevice=(\_ _ _ -> throwIO (SException "can't create encrypted file" (Just path) ePERM)),
+    fo_access=encryptedFileAccess efstatev state path,
+    fo_removeLink=throwIO (SException "can't remove encrypted file" (Just path) ePERM),
+    fo_setFileMode=(\_ -> throwIO (SException "can't chmod encrypted file" (Just path) ePERM))
     }
 
 encryptedFileOpen :: TVar EncFileState -> State -> FilePath -> OpenMode -> OpenFileFlags -> IO SHandle
@@ -137,4 +140,9 @@ encryptWriteFile path keyphrase cleartext = do
   let cipherText = encrypt ctx cleartext
   BS.writeFile path cipherText
   
-  
+encryptedFileAccess :: TVar EncFileState -> State -> FilePath -> Int -> IO ()
+encryptedFileAccess _ state path perms = logcall "encryptedFile.access" state path $ do
+  let rpath = realPath state path
+      (readflag,writeflag,execflag) = accessFlags perms
+  ok <- fileAccess rpath readflag writeflag execflag
+  when (not ok) (throwIO (SException "Access check failed" (Just path) ePERM))

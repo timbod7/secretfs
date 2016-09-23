@@ -6,6 +6,7 @@ import qualified Data.Map as M
 
 import Control.Concurrent.STM.TVar
 import Control.Exception(handle,catch,fromException,throwIO,SomeException,Exception)
+import Data.Bits( (.&.) )
 import Data.Typeable
 import GHC.IO.Exception(IOException(..),ioException)
 import System.Posix.Types(ByteCount,FileOffset,UserID,GroupID,EpochTime,FileMode,DeviceID)
@@ -41,7 +42,11 @@ data FileOps = FileOps {
   fo_open :: OpenMode -> OpenFileFlags -> IO SHandle,
   fo_getFileStat :: IO FileStat,
   fo_setFileSize :: FileOffset -> IO (),
-  fo_createDevice :: EntryType -> FileMode -> DeviceID -> IO ()
+  fo_createDevice :: EntryType -> FileMode -> DeviceID -> IO (),
+  fo_removeLink :: IO (),
+  fo_setFileMode :: FileMode -> IO (),
+  fo_access :: Int -> IO ()
+  
 }
 
 data SHandle = SHandle {
@@ -130,3 +135,10 @@ logcall fnname state path ioa = do
     handler se = do
        s_log state (BS.pack (fnname ++ ": Failed with " ++ show se))
        throwIO se
+
+accessFlags :: Int -> (Bool,Bool,Bool)
+accessFlags perms = (readflag,writeflag,execflag)
+  where
+    readflag = perms .&. 4 /= 0
+    writeflag = perms .&. 2 /= 0
+    execflag = perms .&. 1 /=0
