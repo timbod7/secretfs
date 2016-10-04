@@ -187,4 +187,4 @@ getFileOps' :: State -> FilePath -> MagicFileType -> IO FileOps
 getFileOps' state path ftype = case ftype of
   Regular -> regularFileOps state path
   Encrypted -> encryptedFileOps state path
-  Interpolated -> interpolatedFileOps state path
+  (Interpolated bindings) -> interpolatedFileOps state path bindings

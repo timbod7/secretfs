@@ -15,20 +15,24 @@ usage = do
   exitWith (ExitFailure 1)
 
 logMessage :: Handle -> BS.ByteString -> IO ()
---logMessage h bs = BS.hPutStrLn h bs >> hFlush h
-logMessage h bs = BS.putStrLn bs
+logMessage h bs = BS.hPutStrLn h bs >> hFlush h
+--logMessage h bs = BS.putStrLn bs
 
 main :: IO ()
 main = do
   args  <- getArgs
   case args of
-   (srcdir:mountdir:fuseArgs) -> do
+   (srcdir:mountdir:fuseArgs0) -> do
      logh <- openFile "/tmp/secretfs.log" WriteMode
      let config = SecretFSConfig {
            sc_srcDir = srcdir,
            sc_keyPhrase = "xyzzy", -- FIXME
            sc_log = logMessage logh
            }
+
+         -- direct_io is needed to prevent os caching
+         -- from delaying changes
+         fuseArgs = "-o":"direct_io":fuseArgs0
      fuseOperations <- createSecretFS config 
      withArgs (mountdir:fuseArgs) $ fuseMain fuseOperations defaultExceptionHandler
    _ -> usage

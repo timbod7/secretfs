@@ -6,6 +6,7 @@ import qualified Data.Aeson as JSON
 import qualified Data.Aeson.Types as JSON
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Map as M
 
 import Control.Applicative
@@ -66,9 +67,11 @@ instance JSON.FromJSON DirConfig where
   parseJSON o = DirConfig <$> JSON.parseJSON o
 
 instance JSON.FromJSON MagicFileType where
-  parseJSON (JSON.String s) | s == "encrypted" = pure Encrypted
-                            | s == "instance" = pure Interpolated
-                            | s == "regular" = pure Regular
-                            | otherwise = empty
+  parseJSON (JSON.Object hm) = case HM.toList hm of
+    [(k,v)] | k == "interpolated" -> Interpolated <$> JSON.parseJSON v
+            | k == "regular" -> pure Regular
+            | k == "encrypted" -> pure Encrypted
+            | otherwise -> empty
+              
   parseJSON _ = empty
 

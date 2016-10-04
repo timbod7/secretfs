@@ -24,7 +24,7 @@ data DirConfig = DirConfig {
 data MagicFileType
   = Regular
   | Encrypted
-  | Interpolated
+  | Interpolated FilePath
   deriving (Eq,Show)
 
 data State = State {
@@ -46,7 +46,6 @@ data FileOps = FileOps {
   fo_removeLink :: IO (),
   fo_setFileMode :: FileMode -> IO (),
   fo_access :: Int -> IO ()
-  
 }
 
 data SHandle = SHandle {

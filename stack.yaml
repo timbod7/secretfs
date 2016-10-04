@@ -43,6 +43,7 @@ extra-deps:
 - HFuse-0.2.4.5
 - rncryptor-0.0.2.3
 - pbkdf-1.1.1.1
+- hastache-aeson-0.1.1.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}

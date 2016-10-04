@@ -15,8 +15,8 @@ import Crypto.RNCryptor.Types(newRNCryptorContext,newRNCryptorHeader)
 import System.Directory(doesFileExist)
 import System.Fuse(OpenMode,OpenFileFlags,FileStat(..),EntryType(..),ePERM)
 import System.IO(IOMode(..),SeekMode(..),openFile,hClose,hSeek)
-import System.Posix.Types(ByteCount,FileOffset,EpochTime)
 import System.Posix.Files(getFileStatus,fileAccess)
+import System.Posix.Types(ByteCount,FileOffset,EpochTime)
 
 import System.SecretFS.Core
 
