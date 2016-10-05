@@ -144,5 +144,8 @@ encryptedFileAccess :: TVar EncFileState -> State -> FilePath -> Int -> IO ()
 encryptedFileAccess _ state path perms = logcall "encryptedFile.access" state path $ do
   let rpath = realPath state path
       (readflag,writeflag,execflag) = accessFlags perms
-  ok <- fileAccess rpath readflag writeflag execflag
-  when (not ok) (throwIO (SException "Access check failed" (Just path) ePERM))
+
+  -- We only check write and exec - reads are always ok      
+  when (not writeflag && execflag) $ do
+    ok <- fileAccess rpath readflag writeflag execflag
+    when (not ok) (throwIO (SException "Access check failed" (Just path) ePERM))

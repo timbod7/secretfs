@@ -41,15 +41,18 @@ createSecretFS config = do
   mountTime <- (fromIntegral . round) <$> getPOSIXTime
   userID <- getRealUserID
   groupID <- getRealGroupID
-  state <- State
-    <$> pure (sc_srcDir config)
-    <*> pure (sc_keyPhrase config)
-    <*> pure (sc_log config)
-    <*> pure userID
-    <*> pure groupID
-    <*> pure mountTime
-    <*> atomically (newTVar M.empty)
-    <*> atomically (newTVar M.empty)
+  dirConfigs <- atomically (newTVar M.empty)
+  fileOps <- atomically (newTVar M.empty)
+  let state = State
+       (sc_srcDir config)
+       (sc_keyPhrase config)
+       (sc_log config)
+       userID
+       groupID
+       mountTime
+       dirConfigs
+       fileOps
+       (readContent state)
   return (mkFuseOperations config state)
 
 mkFuseOperations :: SecretFSConfig -> State -> FuseOperations SHandle
@@ -188,3 +191,13 @@ getFileOps' state path ftype = case ftype of
   Regular -> regularFileOps state path
   Encrypted -> encryptedFileOps state path
   (Interpolated bindings) -> interpolatedFileOps state path bindings
+
+readContent ::  State -> FilePath -> IO BS.ByteString
+readContent state path = do
+  fops <- getFileOps state path
+  length <- (fromIntegral . statFileSize) <$> fo_getFileStat fops
+  sh <- fo_open fops ReadOnly flags
+  sh_read sh length 0
+  where
+    flags = OpenFileFlags False False False False False
+

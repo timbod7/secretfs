@@ -5,6 +5,8 @@ module System.SecretFS.InterpolatedFile(
 import qualified Data.Aeson as JSON
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
+import qualified Data.Text.Encoding as T
+import qualified Data.Text.Encoding.Error as T
 import qualified Data.Text.Lazy.Encoding as LT
 
 
@@ -18,7 +20,7 @@ import System.IO(IOMode(..),SeekMode(..),openFile,hClose,hSeek)
 import System.Fuse
 import System.Posix.Files(modificationTime,getFileStatus,fileAccess,ownerWriteMode,groupWriteMode,otherWriteMode)
 import System.Posix.Types(ByteCount,FileOffset,EpochTime)
-import Text.Hastache(hastacheFile,MuConfig(..),emptyEscape)
+import Text.Hastache(hastacheStr,MuConfig(..),emptyEscape)
 import Text.Hastache.Aeson(jsonValueContext)
 
 import System.SecretFS.Core
@@ -30,7 +32,7 @@ data InterpText = InterpText {
 
 data InterpFileState = InterpFileState {
   ifs_state :: State,
-  ifs_path :: FilePath,
+  ifs_template :: FilePath,
   ifs_bindings :: FilePath,
   ifs_interpText ::  Maybe InterpText
   }
@@ -88,13 +90,13 @@ foFileAccess statev perms = logcall' "interpolatedfile.fileAccess" statev $ do
 
 throwErr :: IFStateV -> Errno -> String -> IO a
 throwErr statev errno s = do
-  path <- atomically (ifs_path <$> readTVar statev)
+  path <- atomically (ifs_template <$> readTVar statev)
   throwIO (SException s (Just path) errno)
 
 getRealPath :: IFStateV -> IO FilePath
 getRealPath statev = do
   state <- atomically (readTVar statev)
-  return (realPath (ifs_state state) (ifs_path state))
+  return (realPath (ifs_state state) (ifs_template state))
 
 getInterpolatedText :: IFStateV -> IO InterpText
 getInterpolatedText statev = logcall' "interpolatedfile.getInterpolatedText" statev $ do
@@ -110,22 +112,22 @@ getInterpolatedText statev = logcall' "interpolatedfile.getInterpolatedText" sta
 loadInterpolatedText :: IFStateV -> IO InterpText
 loadInterpolatedText statev = logcall' "interpolatedfile.loadInterpolatedText" statev $ do
   state <- atomically (readTVar statev)
-  let rpath = realPath (ifs_state state) (ifs_path state)
-      rbindings = realPath (ifs_state state) (ifs_bindings state)
-
   modifyTime <- getModifyTime statev
-
+  let rtemplate = realPath (ifs_state state) (ifs_template state)
+      rbindings = realPath (ifs_state state) (ifs_bindings state)
+      
   -- read the bindings file into a single json value
   bindings <- do
-    bs <- LBS.readFile rbindings
-    case JSON.eitherDecode bs of
+    bs <- s_readContent (ifs_state state) (ifs_bindings state)
+    case JSON.eitherDecode (LBS.fromStrict bs) of
       Left err -> throwIO (SException "can't parse bindings json" (Just rbindings) eFAULT)
       Right jv -> return (jv::JSON.Value)
 
   -- use hastash to interpolate the template
+  template <-  T.decodeUtf8With T.lenientDecode <$> BS.readFile rtemplate
   let config = MuConfig emptyEscape Nothing Nothing (const (return Nothing))
       context = jsonValueContext bindings
-  text <- hastacheFile config rpath context
+  text <- hastacheStr config template context
   let bs = LBS.toStrict (LT.encodeUtf8 text)
   let itext = (InterpText bs modifyTime)
 
@@ -138,7 +140,7 @@ loadInterpolatedText statev = logcall' "interpolatedfile.loadInterpolatedText" s
 getModifyTime :: IFStateV -> IO EpochTime
 getModifyTime statev = do
   state <- atomically (readTVar statev)
-  pathModifyTime <- modificationTime <$> getFileStatus (realPath (ifs_state state) (ifs_path state))
+  pathModifyTime <- modificationTime <$> getFileStatus (realPath (ifs_state state) (ifs_template state))
   bindingsModifyTime <- modificationTime <$> getFileStatus (realPath (ifs_state state) (ifs_bindings state))
   return (max pathModifyTime bindingsModifyTime)
 
@@ -146,4 +148,4 @@ getModifyTime statev = do
 logcall' :: String -> IFStateV -> IO a -> IO a
 logcall' fnname statev ioa = do
   state <- atomically (readTVar statev)
-  logcall fnname (ifs_state state) (ifs_path state) ioa
+  logcall fnname (ifs_state state) (ifs_template state) ioa

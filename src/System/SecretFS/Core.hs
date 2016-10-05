@@ -35,7 +35,8 @@ data State = State {
   s_groupID :: GroupID,
   s_mountTime :: EpochTime,
   s_dirConfigs :: TVar (M.Map FilePath (DirConfig,EpochTime)),
-  s_fileOps :: TVar (M.Map FilePath (MagicFileType,FileOps))
+  s_fileOps :: TVar (M.Map FilePath (MagicFileType,FileOps)),
+  s_readContent :: FilePath -> IO BS.ByteString
   }
 
 data FileOps = FileOps {
