@@ -27,10 +27,12 @@ data MagicFileType
   | Interpolated FilePath
   deriving (Eq,Show)
 
+data LogLevel = LogDebug | LogInfo | LogError
+
 data State = State {
   s_srcDir :: FilePath,
   s_keyPhrase :: KeyPhrase,
-  s_log :: BS.ByteString -> IO (),
+  s_log :: LogLevel -> BS.ByteString -> IO (),
   s_userID :: UserID,
   s_groupID :: GroupID,
   s_mountTime :: EpochTime,
@@ -86,12 +88,12 @@ exceptionHandler state e = case fromException e of
    (Just e) -> case ioe_errno e of
      (Just errno) -> return (Errno errno)
      Nothing -> do
-       s_log state (BS.pack ("io exception without errno: " ++ show e))
+       s_log state LogError (BS.pack ("io exception without errno: " ++ show e))
        return eFAULT
    Nothing -> case fromException e of
      (Just (SException message mpath errno)) -> return errno
      Nothing -> do
-       s_log state (BS.pack ("exception: " ++ show e))
+       s_log state LogError (BS.pack ("exception: " ++ show e))
        return eFAULT
 
 convertStatus :: FileStatus -> FileStat
@@ -126,14 +128,14 @@ convertMode ReadWrite _ = ReadWriteMode
 
 logcall :: String -> State -> FilePath -> IO a -> IO a
 logcall fnname state path ioa = do
-  s_log state (BS.pack (fnname ++ ": " ++ path ++ " -> " ++ realPath state path))
+  s_log state LogDebug (BS.pack (fnname ++ ": " ++ path ++ " -> " ++ realPath state path))
   a <- catch ioa handler
-  s_log state (BS.pack (fnname ++ ": Done"))
+  s_log state LogDebug (BS.pack (fnname ++ ": Done"))
   return a
   where
     handler :: SomeException -> IO a
     handler se = do
-       s_log state (BS.pack (fnname ++ ": Failed with " ++ show se))
+       s_log state LogError (BS.pack (fnname ++ ": Failed with " ++ show se))
        throwIO se
 
 accessFlags :: Int -> (Bool,Bool,Bool)

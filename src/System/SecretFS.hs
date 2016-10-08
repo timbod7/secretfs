@@ -33,7 +33,7 @@ import System.SecretFS.InterpolatedFile
 data SecretFSConfig = SecretFSConfig {
   sc_srcDir :: FilePath,
   sc_keyPhrase :: KeyPhrase,
-  sc_log :: BS.ByteString -> IO ()
+  sc_log :: LogLevel -> BS.ByteString -> IO ()
   }
 
 createSecretFS :: SecretFSConfig -> IO (FuseOperations SHandle)
@@ -119,7 +119,7 @@ mkFuseOperations config state = FuseOperations
       fo <- getFileOps state path
       fo_access fo perms
 
-    unimp name = sc_log config ("** BUG: " <> name <> " not implemented") >> return eNOSYS
+    unimp name = sc_log config LogError ("** BUG: " <> name <> " not implemented") >> return eNOSYS
 
 secretOpenDirectory :: State -> FilePath -> IO Errno
 secretOpenDirectory state path = logcall "secretOpenDirectory" state path $ do
@@ -161,7 +161,7 @@ secretReadDirectory state path = logcall "secretReadDirectory" state path $ exce
 
 secretGetFileSystemStats :: State -> String -> IO (Either Errno FileSystemStats)
 secretGetFileSystemStats state str = do
-  s_log state "secretGetFileSystemStats"
+  s_log state LogDebug "secretGetFileSystemStats"
   return $ Right FileSystemStats
     { fsStatBlockSize  = 512
     , fsStatBlockCount = 1
