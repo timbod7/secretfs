@@ -14,7 +14,6 @@ Available options:
   -h,--help                Show this help text
   SRCDIR                   The template source tree
   MOUNTDIR                 The expanded result tree
-  ```
 ```
 
 All files in `SRCDIR` will be visible at the corresponding path in
