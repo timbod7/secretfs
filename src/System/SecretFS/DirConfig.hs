@@ -68,7 +68,7 @@ instance JSON.FromJSON DirConfig where
 
 instance JSON.FromJSON MagicFileType where
   parseJSON (JSON.Object hm) = case HM.toList hm of
-    [(k,v)] | k == "interpolated" -> Interpolated <$> JSON.parseJSON v
+    [(k,v)] | k == "template" -> Interpolated <$> JSON.parseJSON v
             | k == "regular" -> pure Regular
             | k == "encrypted" -> pure Encrypted
             | otherwise -> empty
