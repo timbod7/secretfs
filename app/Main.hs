@@ -72,5 +72,5 @@ main = execParser opts >>= run
   where
     opts = info (helper <*> args)
       ( fullDesc
-     <> progDesc "Mount a filesystem expanding templates and exposing secrets"
+     <> progDesc "Mirror a directory tree expanding templates and exposing secrets"
      <> header "secretfs" )
