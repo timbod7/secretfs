@@ -6,6 +6,7 @@ import qualified Data.Text as T
 
 import Data.Monoid
 import Options.Applicative
+import Control.Exception(bracket_)
 import System.Environment(getArgs,withArgs)
 import System.Exit(exitWith,ExitCode(..))
 import System.Fuse(fuseMain,defaultExceptionHandler)
@@ -21,7 +22,6 @@ usage = do
 data Args = Args {
   srcDir :: FilePath,
   mountDir :: FilePath,
-  keyPhrase :: BS.ByteString,
   logfile :: Maybe FilePath,
   logverbose :: Bool
   }
@@ -30,7 +30,6 @@ args :: Parser Args
 args = Args
   <$> strArgument (metavar "SRCDIR" <> help "The template source tree")
   <*> strArgument (metavar "MOUNTDIR" <> help "The expanded result tree")
-  <*> pure "xyzzy"
   <*> ((\s -> if null s then Nothing else Just s) <$> strOption (long "logfile" <> value ""))
   <*> switch (long "verbose")
 
@@ -46,6 +45,15 @@ logMessage h verbose lvl bs
     show LogDebug False = False
     show _ _ = True
 
+getKeyPhrase :: IO BS.ByteString
+getKeyPhrase = do
+  putStr "Encryption key phrase: "
+  hFlush stdout
+  old <- hGetEcho stdin
+  keyPhrase <- bracket_ (hSetEcho stdin False) (hSetEcho stdin old) getLine
+  putChar '\n'
+  return (BS.pack keyPhrase)
+
 mkLogger :: Maybe FilePath -> Bool -> IO (LogLevel -> BS.ByteString -> IO ())
 mkLogger Nothing _ = return (\_ _ -> return ())
 mkLogger (Just logfile) verbose = do
@@ -54,10 +62,11 @@ mkLogger (Just logfile) verbose = do
 
 run :: Args -> IO ()
 run args = do
+  keyPhrase <- getKeyPhrase
   log <- mkLogger (logfile args) (logverbose args)
   let config = SecretFSConfig {
         sc_srcDir = srcDir args,
-        sc_keyPhrase = keyPhrase args,
+        sc_keyPhrase = keyPhrase,
         sc_log = log
         }
        -- direct_io is needed to prevent os caching
