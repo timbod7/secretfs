@@ -1,6 +1,14 @@
 Secretfs is a [FUSE][] filesystem that mirrors an existing filesystem
 tree, but with mustache file templates expanded and specific files
-decrypted. It has been tested with OSX, and should also work on linux.
+decrypted.
+
+A use case for this tool is where a directory tree representing
+deployed configuration is kept in a source codebase, with
+encrypted secrets. During deployment secretfs provides a temporary
+mirror of this tree, but with cleartext secrets, interpolated as
+required.
+
+It has been tested with OSX, and should also work on linux.
 
 # Usage and configuration
 
