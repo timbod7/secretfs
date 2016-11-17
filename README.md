@@ -1,5 +1,5 @@
 Secretfs is a [FUSE][] filesystem that mirrors an existing filesystem
-tree, but with file templates expanded and specific files
+tree, but with mustache file templates expanded and specific files
 decrypted. It has been tested with OSX, and should also work on linux.
 
 # Usage and configuration
@@ -88,5 +88,5 @@ stack build; stack install
 
 # WARNING!
 
-This software is highly experimental. It could lose or corrupt your
+This software is highly experimental. It could expose, lose or corrupt your
 data. Use at your own risk, on backed up data.
