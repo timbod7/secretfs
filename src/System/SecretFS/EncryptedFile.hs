@@ -135,7 +135,7 @@ decryptReadFile path keyphrase = do
 
 encryptWriteFile :: FilePath -> KeyPhrase -> BS.ByteString -> IO ()
 encryptWriteFile path keyphrase cleartext = do
-  hdr <- newRNCryptorHeader keyphrase
+  hdr <- newRNCryptorHeader
   let ctx = newRNCryptorContext keyphrase hdr
   let cipherText = encrypt ctx cleartext
   BS.writeFile path cipherText

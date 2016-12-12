@@ -37,11 +37,16 @@ resolver: lts-6.16
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
+- location:
+    git: git@github.com:m15k/hfuse.git
+    commit: 52763b2906234b7595fa7f5692981133d9971b34
+- location:
+    git: git@github.com:RNCryptor/rncryptor-hs.git
+    commit: 0e095f2c508810ca4f0e3f5bab9b395df5e09739
+
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
-- HFuse-0.2.4.5
-- rncryptor-0.0.2.3
 - pbkdf-1.1.1.1
 - hastache-aeson-0.1.1.0
 
