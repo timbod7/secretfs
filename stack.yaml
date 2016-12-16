@@ -42,7 +42,7 @@ packages:
     commit: 52763b2906234b7595fa7f5692981133d9971b34
 - location:
     git: git@github.com:RNCryptor/rncryptor-hs.git
-    commit: 0e095f2c508810ca4f0e3f5bab9b395df5e09739
+    commit: 5756495024804b7ba37dd788c8303ac2b84cd1a7
 
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)

@@ -131,7 +131,9 @@ writeIfDirty efstatev state path = do
 decryptReadFile :: FilePath -> KeyPhrase -> IO BS.ByteString
 decryptReadFile path keyphrase = do
   cipherText <- BS.readFile path
-  return (decrypt cipherText keyphrase)
+  case decrypt cipherText keyphrase of
+    Left err -> throwIO err
+    Right clearText -> return clearText
 
 encryptWriteFile :: FilePath -> KeyPhrase -> BS.ByteString -> IO ()
 encryptWriteFile path keyphrase cleartext = do
